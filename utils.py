@@ -1,54 +1,113 @@
-import numpy as np
+"""
+A module storing for convenience some functions used in the other modules.
+"""
 import torch
-import params
+
+from configs import parameters
 
 
 def initial_vorticity(x):
     """
-    Function to define the initial vorticity.
+    A function representing the initial vorticity of the flow.
 
     params: 
-        x: a tensor of arbitrary shape (..., 2) interpreted as tensor of points of shape (...) on the plane.
+        x: a tensor of arbitrary shape (..., 2) interpreted as a tensor of points of shape (...) on the plane.
 
     return:
         vorticity: a tensor of the shape (...), i.e. as x without the last dimension, of values of the initial vorticity at x.
     """
-    vorticity = params.W0*torch.sin(x[...,0])*torch.cos(x[...,1])
-
+    W0 = parameters["initial_vorticity_scalar"]
+    vorticity = W0*torch.cos(torch.pi*x[...,1]/3)
     return vorticity
 
-#function for the initial boundary vorticity
-#NB: for convenience computed for an array of points in 2d
-def theta(vorticity, x):
-    projected_points = torch.zeros_like(x)
-    projected_points[...,0] = x[...,0]
-    return vorticity(projected_points)
 
-#cutoff function for the perturbed vorticity
-#NB: comes as the second derivative of 2*(x2-0.5)**3-1.5*(x2-0.5)+0.5
-def cutoff(x):
-    return 12*(x[...,1]/params.eps - 0.5)*(x[...,1] > 0).float()*(x[...,1] < params.eps).float()
+def zeta(x, vorticity, domain = parameters["domain"]):
+    """
+    A function to compute the boundary vorticity values.
 
-#function for the external force curl
-def external_force(x, t):
-    return params.G0*torch.ones_like(x[:,0])
+    Args:
+        x: a tensor of arbitrary shape (..., 2) interpreted as tensor of points of shape (...) on the plane.
+        vorticity: a function representing the vorticity to compute the boundary values from.
+        domain: the name of the domain (default is taken from configs).
+
+    Returns:
+        boundary_vorticity: if domain is "half-plane", a tensor of shape (...) with values of the boundary vorticity at x;
+            if domain is "channel", a tuple of two such tensors for the lower and upper boundaries.
+    """
+    if domain == "half-plane": 
+        projected_points = torch.zeros_like(x)
+        projected_points[...,0] = x[...,0]
+        boundary_vorticity = vorticity(projected_points).detach()
+        return boundary_vorticity
+    elif domain == "channel": 
+        H = parameters["domain_size"]
+        projected_points_lower = torch.zeros_like(x)
+        projected_points_lower[...,0] = x[...,0]
+        boundary_vorticity_lower = vorticity(projected_points_lower).detach()
+        projected_points_upper = H*torch.ones_like(x)
+        projected_points_upper[...,0] = x[...,0]
+        boundary_vorticity_upper = vorticity(projected_points_upper).detach()
+        return boundary_vorticity_lower, boundary_vorticity_upper
+    else:
+        raise TypeError("Domain is not recognized.")
+
+
+def cutoff(x, domain = parameters["domain"]):
+    """
+    The cutoff function for the perturbed vorticity (comes as the second derivative of 2*(x2-0.5)**3-1.5*(x2-0.5)+0.5).
+
+    Args:
+        x: a tensor of shape (..., 2) interpreted as tensor of points of shape (...) on the plane.
+        domain: the name of the domain (default is taken from configs).
+
+    Returns:
+        cutoff_values: if domain is "half-plane", a tensor of shape (...) with values of the cutoff at points from x;
+            if domain is "channel", a tuple of two such tensors for the lower and upper boundaries.
+    """
+    eps = parameters["boundary_cutoff"]
+    if domain == "half-plane": 
+        cutoff_values = 12*(x[...,1]/eps - 0.5)*(x[...,1] > 0).float()*(x[...,1] < eps).float()
+        return cutoff_values
+    elif domain == "channel": 
+        H = parameters["domain_size"]
+        cutoff_values_lower = 12*(x[...,1]/eps - 0.5)*(x[...,1] > 0).float()*(x[...,1] < eps).float() 
+        cutoff_values_upper = 12*((H - x[...,1])/eps - 0.5)*(x[...,1] < H).float()*(x[...,1] > H - eps).float() 
+        return cutoff_values_lower, cutoff_values_upper
+    else:
+        raise TypeError("Domain is not recognized.")
+
+
+def external_force(x):
+    """
+    The external force curl G(x, t) acting as the external vorticity in the vorticity equation (note: time-independent version realized).
+
+    Args:
+        x: a tensor of arbitrary shape (..., 2) interpreted as tensor of points of shape (...) on the plane.
+        t: a float number representing the time.
+
+    Returns:
+        value: a tensor of shape (...) of values at points from x.
+    """
+    G0 = parameters["external_vorticity_force_scalar"]
+    value = G0*torch.ones_like(x[...,0])
+    return value
 
 
 def create_lattice(
-        N = params.N,
-        H = params.H,
+        N = parameters["particles_number"],
+        H = parameters["domain_size"],
         reshaped = True
         ):
     """
     A function to create a custom lattice for the box [-H, H]x[0, H].
 
     Args:
-        N: number of subintervals within the segment [0, H] (default is taken from params.py).
-        H: the size of the domain (default is taken from params.py).
-        reshaped: if True, returns as a tensor of shape (:, 2).
+        N: number of subintervals within the segment [0, H] (default is taken from configs).
+        H: the size of the domain (default is taken from configs).
+        reshaped: if True, returns as a tensor of shape (., 2).
 
     Return:
-        lattice_points: a tensor of lattice points with shape (:, 2) or (:, :, 2).
+        lattice_points: a tensor of lattice points with shape (., 2) or (., ., 2).
         h_0: the meshsize of the lattice.
     """
     lattice_points = torch.empty(2*N+1, N+1, 2)
