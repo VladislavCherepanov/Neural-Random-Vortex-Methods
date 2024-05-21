@@ -1,6 +1,6 @@
-# Neural-Random-Vortex-Methods
+# Neural Networks-based Random Vortex Methods for Modelling Incompressible Flows
 
-A repository with code for the paper **"Neural Networks-based Random Vortex Methods for Modelling Incompressible Flows"**. 
+A repository with the official implementation code for the paper **"Neural Networks-based Random Vortex Methods for Modelling Incompressible Flows"**. 
 
 The packages used in the implementation: PyTorch, NumPy, Matplotlib, OS
 
