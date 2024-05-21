@@ -2,7 +2,7 @@
 
 A repository with the official implementation code for the paper **"Neural Networks-based Random Vortex Methods for Modelling Incompressible Flows"**. 
 
-![ tentacle.](https://github.com/VladislavCherepanov/Neural-Random-Vortex-Methods/edit/main/assets/NRV_algo_flowchart.png)
+![ tentacle.](./assets/NRV_algo_flowchart.png)
 
 ## Requirements
 
