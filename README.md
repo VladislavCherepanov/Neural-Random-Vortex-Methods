@@ -6,10 +6,12 @@ A repository with the official implementation code for the paper **"Neural Netwo
 
 ## Requirements
 
-The packages used in the implementation: PyTorch, NumPy, Matplotlib, OS
+The implementation is done in PyTorch; other packages that were used in the code are NumPy and Matplotlib. To install the requirements, use the command
 
-The parameters for the initialization are stored in the parameters dictionary in configs.py -- run main
 ```
 pip install -r requirements.txt
 ```
 
+## Running the code
+
+The parameters for the initialization are stored in the parameters dictionary in configs.py -- run main
