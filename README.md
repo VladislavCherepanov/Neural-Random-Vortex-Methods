@@ -5,7 +5,7 @@ A repository with code for the paper **"Neural Networks-based Random Vortex Meth
 The packages used in the implementation: PyTorch, NumPy, Matplotlib, OS
 
 The parameters for the initialization are stored in the parameters dictionary in configs.py -- run main
-
-'''
+```
 pip install -r requirements.txt
-'''
+```
+
