@@ -1,0 +1,179 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from matplotlib import cm
+from mpl_toolkits.mplot3d import Axes3D
+import P1FEM_periodicConditions
+
+
+
+#######################################################################################
+#                                   Generate mesh 
+#######################################################################################
+
+# choose mesh size
+Nx=20
+Ny=20
+Lx=1.0
+Ly=1.0
+
+# Generate a uniform mesh
+Points,Elements,periodicPairs=P1FEM_periodicConditions.uniformTriangulation_Torus(Nx,Ny,Lx,Ly)
+
+
+
+
+#######################################################################################
+#                                 Plot the mesh 
+#######################################################################################
+
+plt.figure(1)
+
+# plot points
+plt.plot(Points[:,0], Points[:,1], marker='o', color='k', linestyle='none')
+
+# set up list of periodic nodes
+PeriodicNodes=[]
+
+
+
+for j in range(np.shape(Elements) [0]):
+    # extract the nodes of the elements and their periodization
+    n1,n2,n3=Elements[j,0],Elements[j,1],Elements[j,2]
+    p1,p2,p3=Elements[j,3],Elements[j,4],Elements[j,5]
+    
+    # plot the edges of the element
+    plt.plot( [Points[n1,0],Points[n2,0]], [Points[n1,1],Points[n2,1]], color='b', linestyle='-', linewidth=2)
+    plt.plot( [Points[n2,0],Points[n3,0]], [Points[n2,1],Points[n3,1]], color='b', linestyle='-', linewidth=2)
+    plt.plot( [Points[n3,0],Points[n1,0]], [Points[n3,1],Points[n1,1]], color='b', linestyle='-', linewidth=2)
+
+    # store the (non trivial) periodization tuples in the list PeriodicNodes
+    # and mark the periodization tuples with red-cyanide X's
+    if n1!=p1:
+        plt.plot(Points[n1,0], Points[n1,1], marker='X', color='r', linestyle='none')
+        plt.plot(Points[p1,0], Points[p1,1], marker='X', color='c', linestyle='none')
+        PeriodicNodes.append([n1,j])
+    if n2!=p2:
+        plt.plot(Points[n2,0], Points[n2,1], marker='X', color='r', linestyle='none')
+        plt.plot(Points[p2,0], Points[p2,1], marker='X', color='c', linestyle='none')
+        PeriodicNodes.append([n2,j])
+    if n3!=p3:
+        plt.plot(Points[n3,0], Points[n3,1], marker='X', color='r', linestyle='none')
+        plt.plot(Points[p3,0], Points[p3,1], marker='X', color='c', linestyle='none')
+        PeriodicNodes.append([n3,j])
+
+if Nx<4 and Ny<4:
+    print(PeriodicNodes)
+
+
+plt.title("Generated mesh")
+
+
+
+
+
+
+
+
+################################################
+#               First test
+################################################
+
+# define true solution (boundary conditions are clearly satisfied)
+def CosCos(X,Y):
+    return np.cos(2*np.pi*X)*np.cos(2*np.pi*Y)
+
+#define its - Delta SinCos
+def LaplacianCosCos(X,Y) :
+    return ((2*np.pi)**2) * 2 * np.cos(2*np.pi*X)*np.cos(2*np.pi*Y)
+
+
+# instantiate Laplacian of the true solution
+f=LaplacianCosCos
+
+# compute the true solution on the grid points
+trueValsNodes=CosCos(Points[:,0],Points[:,1])
+
+CosCosMean=0
+# compute true mean
+for i in range(np.shape(Elements)[0]):
+    # retrieve the coordinates of the nodes of the i-th element
+    # Nodes must be ordered counter clockwise!
+    nodesidx = Elements[i,0:3]
+    nodes=Points[nodesidx,:]
+    #compute element area
+    P = np.vstack(([1,1,1],np.transpose(nodes)))
+    areaT = np.linalg.det(P)/2 
+    sT = np.array(nodes).sum(axis=0)/3
+    #update mean approximation
+    CosCosMean+=areaT * CosCos(sT[0],sT[1])/3
+
+
+# plot true solution
+fig=plt.figure(2)
+ax = fig.add_subplot(111, projection='3d')
+surf = ax.plot_trisurf(Points[:,0], Points[:,1], trueValsNodes, cmap=cm.jet, linewidth=0)
+fig.colorbar(surf)
+ax.xaxis.set_major_locator(MaxNLocator(5))
+ax.yaxis.set_major_locator(MaxNLocator(6))
+ax.zaxis.set_major_locator(MaxNLocator(5))
+plt.title("True CosCos\nMean: "+str(CosCosMean))
+fig.tight_layout()
+
+
+
+
+
+
+# compute approximation u of SinCos by solving the Laplace equation
+# with the right hand side given by the Laplacian of SinCos
+u=P1FEM_periodicConditions.solveLaplace_Torus(Points,Elements,periodicPairs,f)
+
+
+
+
+
+
+
+
+# plot approximate solution
+fig=plt.figure(3)
+ax = fig.add_subplot(111, projection='3d')
+surf = ax.plot_trisurf(Points[:,0], Points[:,1], u, cmap=cm.jet, linewidth=0)
+fig.colorbar(surf)
+ax.xaxis.set_major_locator(MaxNLocator(5))
+ax.yaxis.set_major_locator(MaxNLocator(6))
+ax.zaxis.set_major_locator(MaxNLocator(5))
+plt.title("approximate solution")
+fig.tight_layout()
+
+
+
+# Error metrics
+firstTriangle= Points[Elements[1,0:3],:]
+areaUniform= np.linalg.det(np.vstack(([1,1,1],np.transpose(firstTriangle))))/2
+Err=np.linalg.norm(u-trueValsNodes)*np.sqrt(areaUniform)
+relErr=np.linalg.norm(u-trueValsNodes)/np.linalg.norm(trueValsNodes)
+locErr=np.absolute(u-trueValsNodes)
+print("\n\n\n","Element area:",areaUniform,"\nEuclidean error: ",Err,"\nRelative error: ",relErr,"\nMax. loc. error: ",np.max(locErr),"\n")
+
+
+# plot local error
+fig=plt.figure(4)
+ax = fig.add_subplot(111, projection='3d')
+surf = ax.plot_trisurf(Points[:,0], Points[:,1],locErr , cmap=cm.jet, linewidth=0)
+fig.colorbar(surf)
+ax.xaxis.set_major_locator(MaxNLocator(5))
+ax.yaxis.set_major_locator(MaxNLocator(6))
+ax.zaxis.set_major_locator(MaxNLocator(5))
+plt.title("error")
+fig.tight_layout()
+
+
+
+
+
+
+
+
+plt.show()
