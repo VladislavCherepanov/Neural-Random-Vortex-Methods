@@ -108,7 +108,7 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0):
 
 # solve the Poisson equation
 #
-def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f):
+def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f,uD=None):
     """
     Approximates the solution u of the Poisson equation -Delta u = f on the periodic pipe (with homogenous Dirichlet condition on top and bottom),
         using a finite element discretisation given by [coordinates,elements,Dirichlet,periodicPairs]
@@ -159,9 +159,14 @@ def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f):
 
     A = A.tocsr()
 
+    # incorporating Dirichlet conditions
+    if uD != None:
+        for k in np.unique(Dirichlet):
+            x[k-1] = uD(coordinates[k-1,0],coordinates[k-1,1])
     
     # Assembly of right hand side
     b = np.zeros(nC)
+    b =-A @ x
 
     for i in range(nE):
         nodesidx = elements[i,0:3]
@@ -195,7 +200,7 @@ def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f):
 
 # evaluate solution
 #
-def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination'):
+def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination',uD=None):
     """
         Evaluates a function U(z) at an arbitrary point z=(x,y) given by the the finite element discretization (u,coordinates,elements) over a uniform grid
             of the periodic pipe, where u are the coordinates of U in the finite element basis.
@@ -216,11 +221,15 @@ def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexC
     # Compute y index of the quadrant in which z lies
     I=np.floor(Ny*z[:,1]/Ly)
     
-    # Compute an indicator function to later set U to zero for points which are beyond the Dirichlet boundary
+    # Compute an indicator function and a value vector to later enforce the Dirichlet conditions beyond the top and the bottom
     DirIndicator=np.ones(np.shape(z)[0])
     DirIndicator[I<0]=0
     DirIndicator[I>Ny-1]=0
-    # Exclude points (by setting them to zero) which lie beyond the Dirichlet boundary for later computations
+    DirVals=np.zeros(np.shape(z)[0])
+    if uD != None:
+        DirVals=uD(z[:,0],z[:,1])
+
+    # Fix associated grid points for those inputs (by setting them to zero) which lie beyond the Dirichlet boundary for later computations
     I=I*DirIndicator
     # Change datatype of index to int
     Iint=I.astype(int)
@@ -234,15 +243,15 @@ def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexC
     if interpolation=='convexCombination':      # Compute the bilinear interpolation
         lambdaX=np.remainder((Nx*z[:,0]),Lx)
         lambdaY=np.remainder((Ny*z[:,1]),Ly)
-        U=DirIndicator*(u[n0]*(1-lambdaX)*(1-lambdaY)+u[n1]*lambdaX*(1-lambdaY)+u[n2]*(1-lambdaX)*lambdaY+u[n3]*lambdaX*lambdaY)
+        U=DirIndicator*(u[n0]*(1-lambdaX)*(1-lambdaY)+u[n1]*lambdaX*(1-lambdaY)+u[n2]*(1-lambdaX)*lambdaY+u[n3]*lambdaX*lambdaY) + (1-DirIndicator)*DirVals
     elif interpolation=='quadrantAverage': # Compute U by averaging over the quadrant in which it lies
-        U=DirIndicator*(u[n0]+u[n1]+u[n2]+u[n3])/4
+        U=DirIndicator*(u[n0]+u[n1]+u[n2]+u[n3])/4 + (1-DirIndicator)*DirVals
     #elif interpolation=='weightedMean':
     #    w0= (-z[:,1])
     elif interpolation=='nearestNode':            # in theory this should give the nearest node, but maybe problematic because of conditioning?
         lambdaX=np.round(np.remainder((Nx*z[:,0]),Lx))
         lambdaY=np.round(np.remainder((Ny*z[:,1]),Ly))
-        U=DirIndicator*(u[n0]*(1-lambdaX)*(1-lambdaY)+u[n1]*lambdaX*(1-lambdaY)+u[n2]*(1-lambdaX)*lambdaY+u[n3]*lambdaX*lambdaY)
+        U=DirIndicator*(u[n0]*(1-lambdaX)*(1-lambdaY)+u[n1]*lambdaX*(1-lambdaY)+u[n2]*(1-lambdaX)*lambdaY+u[n3]*lambdaX*lambdaY) + (1-DirIndicator)*DirVals
     
     
 
