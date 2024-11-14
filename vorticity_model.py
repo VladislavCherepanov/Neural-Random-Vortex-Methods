@@ -196,6 +196,51 @@ def print_vorticity(omega, lattice = None):
     return
 
 
+def print_error(omega, t, lattice = None):
+    """
+    
+
+    Args:
+        omega: a function representing the vorticity.
+        lattice: lattice points to print the values at (if None, creates a custom lattice from utils).
+    """
+    if lattice == None: lattice, _ = utils.create_lattice(reshaped = True)
+    N = parameters["particles_number"]
+    N_steps = parameters["steps_number"]
+    T = parameters["total_time"]
+
+    time = t/N_steps*T
+
+    velocity = vel.u(lattice, omega)
+    u1, u2 = velocity[:,0], velocity[:,1]
+    true_velocity = utils.true_velocity(lattice, time).numpy()
+    true_u1, true_u2 = true_velocity[...,0], true_velocity[...,1]
+    error = np.sqrt((true_u1-u1)**2+(true_u2-u2)**2)/np.sqrt(np.mean((true_u1)**2+(true_u2)**2))
+
+    error = np.reshape(error, (N+1, N+1))
+
+    #create custom coloring levels that ignore large values of the vorticity
+    # M=np.percentile(abs(error.numpy()),90)
+    # st=M/50
+    # l=np.arange(-M,M,step=st)
+
+    fig = plt.figure(figsize=(12,8))
+    plt.contourf(torch.reshape(lattice[...,0], (N+1, N+1)).numpy().T, torch.reshape(lattice[...,1], (N+1, N+1)).numpy().T, 
+                 error.T, levels=100)#,vmax=M, vmin=-M, extend="both",cmap="coolwarm",levels=l)
+    plt.colorbar()
+    DIR = './streamplots'
+    num = len([name for name in os.listdir(DIR) if os.path.isfile(os.path.join(DIR, name))])
+    S="./streamplots/outer_flow"+str(num)+".png"
+    plt.savefig(S, dpi=300)
+    plt.close()
+
+    f = open("errors.txt", "a")
+    rel_error = np.sqrt(np.mean((true_u1-u1)**2+(true_u2-u2)**2))/np.sqrt(np.mean((true_u1)**2+(true_u2)**2))
+    f.write(str(rel_error)+"\n")
+
+    return
+
+
 def launch(delay_term, processes_positions):
     """
     A function to setup the model and launch the training procedure for the vorticity; note: printing is done in this function.
