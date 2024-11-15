@@ -9,6 +9,30 @@ def importing_P1FEM_periodicPipe_successfull():
     print("\n\n\nImporting of P1FEM_periodicPipe successful\n\n\n")
 
 
+###########################################################################################################################
+#                                               mean over Triangulation
+########################################################################################################################### 
+
+def meanComputation(coordinates,elements,f):
+
+    fMean = 0
+    nE = np.shape(elements) [0]
+
+    for i in range(nE):
+        nodesidx = elements[i,0:3]
+        nodes=coordinates[nodesidx,:]
+
+
+        # quadrature of f on the i-th element
+        P = np.vstack(([1,1,1],np.transpose(nodes)))
+        areaT = np.linalg.det(P)/2
+        sT = np.array(nodes).sum(axis=0)/3
+
+        fMean += areaT * f(sT[0],sT[1])
+
+    return fMean
+
+
 
 
 
@@ -427,7 +451,7 @@ def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='un
         
 
     if centralization != 'Off':
-        print("\nsolveLaplace_Torus:   Centralization of the RHS\n")
+        print("\nsolveLaplace_Torus:   Centralization of the RHS!\n")
         b=b-bMean*np.ones(nC)
         
 
