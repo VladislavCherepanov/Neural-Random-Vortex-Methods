@@ -363,7 +363,7 @@ def uniformTriangulation_Torus(Nx,Ny,Lx=1.0,Ly=1.0):
 
 
 
-def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='uniform'):
+def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='uniform',centralization='Off'):
     """
     
     params:
@@ -410,6 +410,7 @@ def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='un
     
     # Assembly of right hand side
     b = np.zeros(nC)
+    bMean = 0
 
     for i in range(nE):
         nodesidx = elements[i,0:3]
@@ -422,7 +423,13 @@ def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='un
         sT = np.array(nodes).sum(axis=0)/3
 
         b[elements[i,3:6]] += areaT * f(sT[0],sT[1])/3
+        bMean += areaT * f(sT[0],sT[1])/3
+        
 
+    if centralization != 'Off':
+        print("\nsolveLaplace_Torus:   Centralization of the RHS\n")
+        b=b-bMean*np.ones(nC)
+        
 
     # Computation of freenodes
     freenodes=np.setdiff1d(elements[:,3:6] , np.array([0])) # extract the origin, which will later on be determined by the average
@@ -446,9 +453,8 @@ def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='un
         meanDiscrepancy=umean-xMean
 
         x+=meanDiscrepancy
-        #for k in originNodes:
-        #    x[k]=meanDiscrepancy # ensures that mean is equal to umean
     else:
+        #print("\nsolveLaplace_Torus:   mean retrieval with general grid\n")
         for i in range(nE):
             # retrieve the coordinates of the nodes of the i-th element
             # Nodes must be ordered counter clockwise!
@@ -464,14 +470,104 @@ def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='un
 
         meanDiscrepancy=umean-xMean
         x+=meanDiscrepancy
-        #for k in originNodes:
-        #    x[k]=meanDiscrepancy # ensures that mean is equal to umean
 
 
     
 
     return x
 
+
+
+
+def solveLaplace_Torus_alternateMeanComp(coordinates,elements,periodicPairs,f,umean=0):
+    """
+    
+    params:
+        coordinates:    a Nx2 array containing the coordinates of the mesh
+        elements:       a (nE,6)-array, where nE is the number of integers. The i-th row stores the indices of the nodes that make up the i-th triangle
+                            the first 3 elements of each row, i.e (i,0:3), contain the indices without periodization
+                            the last 3 element of each row, i.e (i,3:6), contain the indices when periodicity is enforced
+        periodicPairs:
+        f:
+        umean           float type scalar, mean valued of the solution u
+
+
+    """
+    
+    nC = np.shape(coordinates) [0] # Number of coordinates
+    nE = np.shape(elements) [0]    # Number of elements
+    x = np.zeros(nC)               # initialization of solution vector
+    #periodizationTuple=[]          # list storing the tuples for periodization
+
+    # initialize approximation of the total area
+    totalArea=0
+
+    # Computation of freenodes
+    freenodes=np.unique(elements[:,3:6]) # extract the origin, which will later on be determined by the average
+
+    # Assembly of stiffness matrix
+    A = sparse.lil_matrix((nC,nC))  # Sparse matrix format
+
+    for i in range(nE):
+        # retrieve the coordinates of the nodes of the i-th element
+        # Nodes must be ordered counter clockwise!
+        nodesidx = elements[i,0:3]
+        nodes=coordinates[nodesidx,:]
+
+
+        P = np.vstack(([1,1,1],np.transpose(nodes)))
+        # Compute area of the element areaT and totalArea
+        areaT = np.linalg.det(P)/2 
+        totalArea += areaT # needed for averaging non uniform grids
+        # Compute grads
+        grad = np.linalg.solve(P,np.array([[0,0],[1,0],[0,1]]))
+        # append stiffness matrix
+        A[np.ix_(elements[i,3:6], elements[i,3:6])] += areaT * grad @ np.transpose(grad)
+
+    for i in range(nC):
+        # design top row of the stiffness matrix such that it encodes the mean
+        A[0,i] = totalArea/len(freenodes)
+    
+    #print(nC,len(freenodes))
+
+    A = A.tocsr()
+
+    
+    # Assembly of right hand side
+    b = np.zeros(nC)
+    bMean = 0
+
+    for i in range(nE):
+        nodesidx = elements[i,0:3]
+        nodes=coordinates[nodesidx,:]
+
+
+        # quadrature of f on the i-th element
+        P = np.vstack(([1,1,1],np.transpose(nodes)))
+        areaT = np.linalg.det(P)/2
+        sT = np.array(nodes).sum(axis=0)/3
+
+        b[elements[i,3:6]] += areaT * f(sT[0],sT[1])/3
+        bMean += areaT * f(sT[0],sT[1])/3
+        
+    b[0] = umean
+
+    
+    
+    # Computation of P1−FEM approximation 
+    x[freenodes]=sparse.linalg.spsolve(A[np.ix_(freenodes, freenodes)],b[freenodes])
+    
+
+    # enforcing periodicity
+    for k in range(periodicPairs.shape[0]):  
+        x[periodicPairs[k,1]]=x[periodicPairs[k,0]]
+         
+    xMean=np.average(x[elements[:,0:3]]@np.ones(3)/3)
+    meanDiscrepancy=umean-xMean
+    x+=meanDiscrepancy
+    print(xMean,meanDiscrepancy)
+
+    return x
 
 
 
