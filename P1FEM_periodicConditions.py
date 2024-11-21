@@ -10,9 +10,11 @@ def importing_P1FEM_periodicPipe_successfull():
 
 
 ###########################################################################################################################
-#                                               mean over Triangulation
+#                                               additional functions
 ########################################################################################################################### 
 
+# compute mean of a function over a given triangulation
+#
 def meanComputation(coordinates,elements,f):
 
     fMean = 0
@@ -35,6 +37,97 @@ def meanComputation(coordinates,elements,f):
 
 
 
+##########################################################################################################################
+#                                       classical Neumann + Dirichlet (Dirichlet boundary must be non empty!)
+##########################################################################################################################
+
+
+# solve the Poisson equation with Neumann and Dirichelt conditions
+#   --> Dirichlet boundary must be non-trivial, i.e. there is at least one Dirichlet edge in the triangulation
+#
+def solveLaplace_classical(coordinates,elements,Dirichlet,Neumann,f,uD=None,g=None):
+    """
+    Approximates the solution u of the Poisson equation -Delta u = f on the periodic pipe (with homogenous Dirichlet condition on top and bottom),
+        using a finite element discretisation given by [coordinates,elements,Dirichlet,periodicPairs]
+    
+    params:             
+        coordinates:    a (nC,2) float array containing the coordinates of the mesh
+        elements:       ndarray of int64, shape ( nE , 3 ), the row (i,:) stores the coordinates of the i-th triangle            
+        Dirichlet:      ndarray of int64, shape ( nD , 2 ), the row (i,:) stores the coordinates of the i-th Dirichlet edge
+        Neumann:        ndarray of int64, shape ( nN , 2 ), the row (i,:) stores the coordinates of the i-th Neumann edge
+        f:              a function (handle) describing the right hand side of Poisson equation
+        uD:             a function (handle) describing the Dirichlet conditions (standard is None, which corresponds to uD=0)
+        g:              a function (handle) describing the Neumann conditions (standard is None, which corresponds to g=0)
+
+    Returns:
+        x:              a (nC,) float array describing the finite element approximation of the true solution u through its values at the gridpoints (the rows of coordinates)
+                            i.e. the i-th component is the value of the finite element approximation Uh at coordinates[i,:]:
+                            --> x[i]=Uh(coordinates[i,:])
+    """
+    
+    nC = np.shape(coordinates) [0] # Number of coordinates
+    nE = np.shape(elements) [0]    # Number of elements
+    nN = np.shape(Neumann) [0]
+    x = np.zeros(nC)               # initialization of solution vector
+
+    # (nE,2) array of first vertex of elements and corresponding edge vectors
+    c1 = coordinates[elements[:,0],:]
+    d21 = coordinates[elements[:,1],:] - c1
+    d31 = coordinates[elements[:,2],:] - c1
+    # (nE,) array of element areas
+    area4 = 2*(d21[:,0]*d31[:,1]-d21[:,1]*d31[:,0])
+    # assembly of stiffness matrix
+    a = np.sum(d21*d31,1)/area4
+    b = np.sum(d31*d31,1)/area4
+    c = np.sum(d21*d21,1)/area4
+    S=np.transpose(np.array([(-2)*a+b+c, a-b , a-c , a-b , b , -a , a-c , -a , c])) #values for assembly of the stiffness matrix
+    I = elements[:,[0,1,2,0,1,2,0,1,2]] # row indices
+    J = elements[:,[0,0,0,1,1,1,2,2,2]] # column indices
+
+    A=sparse.csc_matrix((S.flatten('F'), (I.flatten('F'), J.flatten('F'))), shape=(nC, nC))
+
+
+    # incorporating Dirichlet conditions into right hand side
+    if uD != None:
+        DirNodes=np.unique(Dirichlet)#-1
+        x[DirNodes] = uD(coordinates[DirNodes,0],coordinates[DirNodes,1])
+    b = np.zeros(nC)
+    b =-A @ x
+
+    # construct the right hand side term comming from the potential f
+    for i in range(nE): 
+        nodesidx = elements[i,:]
+        nodes = coordinates[nodesidx,:]
+        # quadrature of f on the i-th element
+        P = np.vstack(([1,1,1],np.transpose(nodes)))
+        areaT = np.linalg.det(P)/2
+        sT = np.array(nodes).sum(axis=0)/3
+        b[nodesidx] += areaT * f(sT[0],sT[1])/3
+
+    # construct the right hand side term comming from the Neumann condition g
+    if g != None:
+        for i in range(nN):
+            nodesidx = Neumann[i,:]
+            nodes = coordinates[nodesidx,:]
+            # midpoint computation
+            mE = np.array(nodes).sum(axis=0)/2
+            b[nodesidx] += np.linalg.norm(nodes[0,:]-nodes[1,:])* g(mE[0],mE[1])/2 
+    
+
+
+    # Computation of P1−FEM approximation
+    freenodes=np.setdiff1d(elements[:,3:6] , Dirichlet)
+    x[freenodes]=sparse.linalg.spsolve(A[np.ix_(freenodes, freenodes)],b[freenodes])
+    #x[Dirichlet]=np.zeros(Dirichlet.shape) # unnecessary in the case of hom Dirichlet
+
+    # enforcing periodicity
+    for k in range(periodicPairs.shape[0]):  
+        x[periodicPairs[k,1]]=x[periodicPairs[k,0]]
+
+    return x
+
+
+
 
 
 ##########################################################################################################################
@@ -46,7 +139,7 @@ def meanComputation(coordinates,elements,f):
 
 # generate uniform mesh
 #
-def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0):
+def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0,boxcutout=np.array([])):
     """
     Creates a uniform triangulation of the periodic Pipe ([0,Lx] mod Lx)X[0,Ly], with
         step size 1/Nx in the first direction (x-direction) and step size 1/(Ny+1) in the second direction.
@@ -58,6 +151,8 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0):
         Ny: int, specifies them number of discretization steps in the y-direction
         Lx: float (optional), determining the (periodic) length of the pipe (standard input: 1.0 )
         Ly: float (optional), determining the height of the pipe (standard input: 1.0 )
+        obstacles:  a (2,2) int array marking a box [a(Lx/Nx),b(Lx/Nx)]x[c(Ly/Ny),d(Ly/Ny)] that is cut out from the pipe
+                    --> obstacles[0,0]=a,obstacles[0,1]=b and obstacles[1,0]=c,obstacles[1,1]=d
     
     Returns:
         coordinates: ndarray of float types, shape ( (Nx+1)*(Ny+1) , 2 )  the row (i,:) stores the coordinates of the i-th gridpoint
@@ -85,8 +180,24 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0):
     Dirichlet = []
     periodicPairs=np.zeros((Ny+1,2), dtype=int)
     k=0
+    iInObstacleBound=False
+    jInObstacleBound=False
+
     for i in range(Ny):
         for j in range(Nx):
+            if np.shape(boxcutout)==(2,2):
+                if  boxcutout[0,0] <= j and j+1 <= boxcutout[0,1]:
+                    jInObstacleBound=True
+                else:
+                    jInObstacleBound=False
+                if  boxcutout[1,0] <= i and i+1 <= boxcutout[1,1]:
+                    iInObstacleBound=True
+                else:
+                    iInObstacleBound=False
+
+            if jInObstacleBound and iInObstacleBound:
+                continue
+
             # Node indices for square in mesh
             n0 = i * (Nx + 1) + j
             n1 = n0 + 1
@@ -102,20 +213,38 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0):
                 p3 = p1 + (Nx + 1)
                 periodicPairs[k,0]=p1
                 periodicPairs[k,1]=n1
-                
                 k+=1
 
             # Two triangles for each square,
             #   before (n0,n1,n2) and after (p0,p1,p2) periodization
             elements.append([n0, n1, n3, p0, p1, p3])  # Lower triangle
             elements.append([n0, n3, n2, p0, p3, p2])  # Upper triangle
-            
             # adding lower edge to Dirichlet boundary
             if i==0:
                 Dirichlet.append([n0,n1,p0,p1])
             # adding upper edge
             if i==Ny-1:
                 Dirichlet.append([n2,n3,p2,p3])
+
+            if np.shape(boxcutout)==(2,2): 
+                # adding left wall of the boxcutout as Dirichlet edges   
+                if j==boxcutout[0,0]-1 and iInObstacleBound:
+                    Dirichlet.append([n1,n3,p1,p3])
+                # adding right wall of the boxcutout as Dirichlet edges   
+                if j==boxcutout[0,1] and iInObstacleBound:
+                    Dirichlet.append([n2,n0,p2,p0])
+                # adding bottom wall of the boxcutout as Dirichlet edges
+                if i==boxcutout[1,0]-1 and jInObstacleBound:
+                    Dirichlet.append([n3,n2,p3,p2])
+                # adding top wall of the boxcutout as Dirichlet edges
+                if i==boxcutout[1,1] and jInObstacleBound:
+                    Dirichlet.append([n0,n1,p0,p1])
+
+
+
+            
+            
+            
 
     periodicPairs[k,1] = Ny * (Nx + 1) + Nx
     periodicPairs[k,0] = Ny * (Nx + 1)
@@ -128,11 +257,102 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0):
 
 
 
-
-
 # solve the Poisson equation
 #
 def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f,uD=None):
+    """
+    Approximates the solution u of the Poisson equation -Delta u = f on the periodic pipe (with homogenous Dirichlet condition on top and bottom),
+        using a finite element discretisation given by [coordinates,elements,Dirichlet,periodicPairs]
+    
+    params:             
+        coordinates:    a (nC,2) float array containing the coordinates of the mesh
+        elements:       ndarray of int64, shape ( nE , 6 ), the row (i,:) stores the coordinates of the i-th triangle (before and after periodization)
+                            - the first 3 elements of each row, i.e (i,0:3), contain the indices without periodization
+                            - the last 3 element of each row, i.e (i,3:6), contain the indices when periodicity is enforced
+                        --> see also Returns of the method uniformTriangulation_periodicPipe            
+        Dirichlet:      ndarray of int64, shape ( nD , 4 ), the row (i,:) stores the coordinates of the i-th Dirichlet edge (before and after periodization)      
+                            - the first 2 elements of each row, i.e (i,0:2), contain the indices without periodization
+                            - the last 2 element of each row, i.e (i,2:4), contain the indices when periodicity is enforced
+                        --> see also Returns of the method uniformTriangulation_periodicPipe
+        periodicPairs:  a (n,2) int-array, where n is the (i,j) denotes the periodic correspondence of i an j
+        f:              a function (handle) describing the right hand side of Poisson equation
+
+    Returns:
+        x:              a (nC,) float array describing the finite element approximation of the true solution u through its values at the gridpoints (the rows of coordinates)
+                            i.e. the i-th component is the value of the finite element approximation Uh at coordinates[i,:]:
+                            --> x[i]=Uh(coordinates[i,:])
+    """
+    
+    nC = np.shape(coordinates) [0] # Number of coordinates
+    nE = np.shape(elements) [0]    # Number of elements
+    x = np.zeros(nC)               # initialization of solution vector
+
+    # (nE,2) array of first vertex of elements and corresponding edge vectors
+    c1 = coordinates[elements[:,0],:]
+    d21 = coordinates[elements[:,1],:] - c1
+    d31 = coordinates[elements[:,2],:] - c1
+    # (nE,) array of element areas
+    area4 = 2*(d21[:,0]*d31[:,1]-d21[:,1]*d31[:,0])
+    # assembly of stiffness matrix
+    a = np.sum(d21*d31,1)/area4
+    b = np.sum(d31*d31,1)/area4
+    c = np.sum(d21*d21,1)/area4
+    S=np.transpose(np.array([(-2)*a+b+c, a-b , a-c , a-b , b , -a , a-c , -a , c])) #values for assembly of the stiffness matrix
+    I = elements[:,[3,4,5,3,4,5,3,4,5]] # row indices
+    J = elements[:,[3,3,3,4,4,4,5,5,5]] # column indices
+
+    A=sparse.csc_matrix((S.flatten('F'), (I.flatten('F'), J.flatten('F'))), shape=(nC, nC))
+
+
+    # incorporating Dirichlet conditions
+    if uD != None:
+        DirNodes=np.unique(Dirichlet)#-1
+        x[DirNodes] = uD(coordinates[DirNodes,0],coordinates[DirNodes,1])
+    
+    # Assembly of the right hand side
+    #sT = (c1+d21+d31)/3
+    #fsT = (area4/4)*f(sT[:,0],sT[:,1])/3
+    #RHS = np.transpose(np.array([fsT,fsT,fsT]))
+    #nodesidxPer=elements[:,3:6]
+    #b=np.bincount(nodesidxPer.flatten('F'),weights=RHS.flatten('F'),minlength=nC) - (A @ x) # (?) problematic if uD not periodic
+    b = np.zeros(nC)
+    b =-A @ x
+
+    for i in range(nE):
+        nodesidx = elements[i,0:3]
+        nodes=coordinates[nodesidx,:]
+        # quadrature of f on the i-th element
+        P = np.vstack(([1,1,1],np.transpose(nodes)))
+        areaT = np.linalg.det(P)/2
+        sT = np.array(nodes).sum(axis=0)/3
+
+        b[elements[i,3:6]] += areaT * f(sT[0],sT[1])/3
+
+    
+
+    
+    
+
+
+    # Computation of P1−FEM approximation
+    freenodes=np.setdiff1d(elements[:,3:6] , Dirichlet)
+    x[freenodes]=sparse.linalg.spsolve(A[np.ix_(freenodes, freenodes)],b[freenodes])
+    #x[Dirichlet]=np.zeros(Dirichlet.shape) # unnecessary in the case of hom Dirichlet
+
+    # enforcing periodicity
+    for k in range(periodicPairs.shape[0]):  
+        x[periodicPairs[k,1]]=x[periodicPairs[k,0]]
+
+    return x
+
+
+
+
+
+# solve the Poisson equation through
+# the code is only for educational purposes/debugging, as the incremental construction of the stiffness matrix is quite slow
+#
+def solveLaplace_periodicPipe_slow(coordinates,elements,Dirichlet,periodicPairs,f,uD=None):
     """
     Approximates the solution u of the Poisson equation -Delta u = f on the periodic pipe (with homogenous Dirichlet condition on top and bottom),
         using a finite element discretisation given by [coordinates,elements,Dirichlet,periodicPairs]
@@ -220,11 +440,9 @@ def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f,uD=
 
 
 
-
-
-# evaluate solution
+# evaluate solution on uniform grids
 #
-def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination',uD=None):
+def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination',uD=None,boxcutout=np.array([])):
     """
         Evaluates a function U(z) at an arbitrary point z=(x,y) given by the the finite element discretization (u,coordinates,elements) over a uniform grid
             of the periodic pipe, where u are the coordinates of U in the finite element basis.
