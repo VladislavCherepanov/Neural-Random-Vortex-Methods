@@ -134,9 +134,6 @@ def solveLaplace_classical(coordinates,elements,Dirichlet,Neumann,f,uD=None,g=No
 #                                       Periodic Pipe
 ##########################################################################################################################
 
-
-
-
 # generate uniform mesh
 #
 def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0,boxcutout=np.array([])):
@@ -151,7 +148,7 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0,boxcutout=np.array([])
         Ny: int, specifies them number of discretization steps in the y-direction
         Lx: float (optional), determining the (periodic) length of the pipe (standard input: 1.0 )
         Ly: float (optional), determining the height of the pipe (standard input: 1.0 )
-        obstacles:  a (2,2) int array marking a box [a(Lx/Nx),b(Lx/Nx)]x[c(Ly/Ny),d(Ly/Ny)] that is cut out from the pipe
+        boxcutout:  a (2,2) int array marking a box [a(Lx/Nx),b(Lx/Nx)]x[c(Ly/Ny),d(Ly/Ny)] that is cut out from the pipe
                     --> obstacles[0,0]=a,obstacles[0,1]=b and obstacles[1,0]=c,obstacles[1,1]=d
     
     Returns:
@@ -162,97 +159,137 @@ def uniformTriangulation_periodicPipe(Nx,Ny,Lx=1.0,Ly=1.0,boxcutout=np.array([])
         Dirichlet:   ndarray of int64, shape ( nD , 4 ), the row (i,:) stores the coordinates of the i-th Dirichlet edge
                         - the first 2 elements of (i,:), i.e.  (i,0:2), contain the vertex numbers of the i-th edge before periodization
                         - the last 2 elements of (i,:), i.e.  (i,2:4), contain the vertex numbers of the i-th edge after periodization
-        periodicPairs   a (n,2) int-array, where n is the (i,j) denotes the periodic  correspondence of i an j
+        periodicPairs   a (n,2) int-array, where n is the number of periodic pairs and (i,j) denotes the periodic  correspondence of i an j
+        gridTrans       a (nCu,2) int-array, where nCu is the number
 
     Comments:
         Still not completely optimized, elements and Dirichlet are first stored as lists and then turned into arrays
     """
 
-    # Generate mesh
+    # Generate full mesh (including the box) 
     x = np.linspace(0, Lx, Nx+1) # Nx+1 because this also creates the boundary nodes before peridization
     y = np.linspace(0, Ly, Ny+1)
     X, Y = np.meshgrid(x, y)
-    coordinates = np.vstack([X.ravel(), Y.ravel()]).T
-
-
+    gridpoints = np.vstack([X.ravel(), Y.ravel()]).T
+    gridTrans = np.zeros(np.shape(gridpoints),dtype=int)#
+    #  readout number of nodes in the mesh (without the inside of the box)
+    noCutouts=0
+    if np.shape(boxcutout)==(2,2):
+        noCutouts=(boxcutout[1,1]-1-boxcutout[1,0])*(boxcutout[0,1]-1-boxcutout[0,0])
+    nC=int(np.shape(gridpoints)[0]-noCutouts)
+    #set up coordinates vector
+    coordinates = np.zeros((nC,2))
+    # translate from the mesh with the nodes inside the box to the one without
+    # therefore compute the translation matrix gridTrans and fill the coordinate vector (only with those nodes not inside the box)
+    iInObstacleBound=False
+    jInObstacleBound=False
+    k=0
+    for i in range(Ny+1):
+        for j in range(Nx+1):
+            if np.shape(boxcutout)==(2,2):
+                if  boxcutout[1,0] < i and i < boxcutout[1,1]:
+                    iInObstacleBound = True
+                else:
+                    iInObstacleBound = False
+                if  boxcutout[0,0] < j and j < boxcutout[0,1]:
+                    jInObstacleBound = True
+                else:
+                    jInObstacleBound = False
+            # number of the (i,j)-th node on the full grid with nodes inside the box
+            n0=i*(Nx+1)+j
+            gridTrans[n0,0]=n0
+            if jInObstacleBound and iInObstacleBound: # make nodes that are inside the box negative in the translation matrix
+                gridTrans[n0,1]=-1
+            else: # 
+                coordinates[k,:]=gridpoints[n0,:]
+                gridTrans[n0,1]=k
+                k+=1
     # Create triangular elements by splitting each square
     elements = []
     Dirichlet = []
     periodicPairs=np.zeros((Ny+1,2), dtype=int)
-    k=0
+    # define some indices that are used to determine whether a square is fully inside the box or not, and to count the periodic pairs
     iInObstacleBound=False
     jInObstacleBound=False
-
-    for i in range(Ny):
+    i1InObstacleBound=False
+    j1InObstacleBound=False
+    k=0
+    for i in range(Ny):        
         for j in range(Nx):
+            # determine whether the square [(i,j),(i+1,j+1)] is fully inside the box <--> no elements in triangulation
             if np.shape(boxcutout)==(2,2):
-                if  boxcutout[0,0] <= j and j+1 <= boxcutout[0,1]:
-                    jInObstacleBound=True
+                if  boxcutout[1,0] <= i and i <= boxcutout[1,1]:
+                    iInObstacleBound = True
                 else:
-                    jInObstacleBound=False
-                if  boxcutout[1,0] <= i and i+1 <= boxcutout[1,1]:
-                    iInObstacleBound=True
+                    iInObstacleBound = False
+                if  boxcutout[0,0] <= j and j <= boxcutout[0,1]:
+                    jInObstacleBound = True
                 else:
-                    iInObstacleBound=False
-
-            if jInObstacleBound and iInObstacleBound:
-                continue
-
-            # Node indices for square in mesh
-            n0 = i * (Nx + 1) + j
-            n1 = n0 + 1
-            n2 = n0 + (Nx + 1)
-            n3 = n2 + 1
+                    jInObstacleBound = False
+                if  boxcutout[1,0] <= i+1 and i+1 <= boxcutout[1,1]:
+                    i1InObstacleBound = True
+                else:
+                    i1InObstacleBound = False
+                if  boxcutout[0,0] <= j+1 and j+1 <= boxcutout[0,1]:
+                    j1InObstacleBound = True
+                else:
+                    j1InObstacleBound = False
+            if iInObstacleBound and i1InObstacleBound and jInObstacleBound and j1InObstacleBound: 
+                continue # break the inner for loop in case that the square is fully contained in the cutout box and thus not part of the triangulation
+            # Node indices for square [(i,j),(i+1,j+1)] in mesh
+            basenode = i * (Nx + 1) + j
+            n0 = gridTrans[basenode,1]
+            n1 = gridTrans[basenode + 1,1]
+            n2 = gridTrans[basenode + (Nx + 1),1]
+            n3 = gridTrans[basenode + (Nx + 1) + 1,1]
             # Node indices after periodization
             p0 = n0
             p1 = n1
             p2 = n2
-            p3 = n3
-            if j==Nx-1: 
-                p1 = i * (Nx + 1)
-                p3 = p1 + (Nx + 1)
+            p3 = n3      
+            # if on the right boundary
+            if j==Nx-1:
+                #add periodization 
+                p1 = gridTrans[i * (Nx + 1),1]
+                p3 = gridTrans[(i+1) * (Nx + 1),1]
                 periodicPairs[k,0]=p1
                 periodicPairs[k,1]=n1
                 k+=1
-
             # Two triangles for each square,
             #   before (n0,n1,n2) and after (p0,p1,p2) periodization
             elements.append([n0, n1, n3, p0, p1, p3])  # Lower triangle
             elements.append([n0, n3, n2, p0, p3, p2])  # Upper triangle
-            # adding lower edge to Dirichlet boundary
+            # adding lower edge to Dirichlet boundary if element is in the first row
             if i==0:
                 Dirichlet.append([n0,n1,p0,p1])
-            # adding upper edge
+            # adding upper edge to Dirichlet boundary if element is in the last row
             if i==Ny-1:
                 Dirichlet.append([n2,n3,p2,p3])
-
+            # adding edges to Dirichlet boundary if the belong to the boundary of the cutout box
             if np.shape(boxcutout)==(2,2): 
                 # adding left wall of the boxcutout as Dirichlet edges   
-                if j==boxcutout[0,0]-1 and iInObstacleBound:
+                if j==boxcutout[0,0]-1 and iInObstacleBound and i1InObstacleBound:
                     Dirichlet.append([n1,n3,p1,p3])
                 # adding right wall of the boxcutout as Dirichlet edges   
-                if j==boxcutout[0,1] and iInObstacleBound:
+                if j==boxcutout[0,1] and iInObstacleBound and i1InObstacleBound:
                     Dirichlet.append([n2,n0,p2,p0])
                 # adding bottom wall of the boxcutout as Dirichlet edges
-                if i==boxcutout[1,0]-1 and jInObstacleBound:
+                if i==boxcutout[1,0]-1 and jInObstacleBound and j1InObstacleBound:
                     Dirichlet.append([n3,n2,p3,p2])
                 # adding top wall of the boxcutout as Dirichlet edges
-                if i==boxcutout[1,1] and jInObstacleBound:
+                if i==boxcutout[1,1] and jInObstacleBound and j1InObstacleBound:
                     Dirichlet.append([n0,n1,p0,p1])
 
 
 
-            
-            
-            
-
-    periodicPairs[k,1] = Ny * (Nx + 1) + Nx
-    periodicPairs[k,0] = Ny * (Nx + 1)
+    periodicPairs[k,1] = gridTrans[Ny * (Nx + 1) + Nx,1]
+    periodicPairs[k,0] = gridTrans[Ny * (Nx + 1),1]
 
     elements=np.array(elements,dtype=int)
     Dirichlet=np.array(Dirichlet,dtype=int)
 
-    return coordinates,elements,Dirichlet,periodicPairs
+    return coordinates,elements,Dirichlet,periodicPairs,gridTrans
+
 
 
 
@@ -300,15 +337,11 @@ def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f,uD=
     S=np.transpose(np.array([(-2)*a+b+c, a-b , a-c , a-b , b , -a , a-c , -a , c])) #values for assembly of the stiffness matrix
     I = elements[:,[3,4,5,3,4,5,3,4,5]] # row indices
     J = elements[:,[3,3,3,4,4,4,5,5,5]] # column indices
-
     A=sparse.csc_matrix((S.flatten('F'), (I.flatten('F'), J.flatten('F'))), shape=(nC, nC))
-
-
     # incorporating Dirichlet conditions
     if uD != None:
         DirNodes=np.unique(Dirichlet)#-1
         x[DirNodes] = uD(coordinates[DirNodes,0],coordinates[DirNodes,1])
-    
     # Assembly of the right hand side
     #sT = (c1+d21+d31)/3
     #fsT = (area4/4)*f(sT[:,0],sT[:,1])/3
@@ -317,7 +350,6 @@ def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f,uD=
     #b=np.bincount(nodesidxPer.flatten('F'),weights=RHS.flatten('F'),minlength=nC) - (A @ x) # (?) problematic if uD not periodic
     b = np.zeros(nC)
     b =-A @ x
-
     for i in range(nE):
         nodesidx = elements[i,0:3]
         nodes=coordinates[nodesidx,:]
@@ -327,18 +359,10 @@ def solveLaplace_periodicPipe(coordinates,elements,Dirichlet,periodicPairs,f,uD=
         sT = np.array(nodes).sum(axis=0)/3
 
         b[elements[i,3:6]] += areaT * f(sT[0],sT[1])/3
-
-    
-
-    
-    
-
-
     # Computation of P1−FEM approximation
     freenodes=np.setdiff1d(elements[:,3:6] , Dirichlet)
     x[freenodes]=sparse.linalg.spsolve(A[np.ix_(freenodes, freenodes)],b[freenodes])
     #x[Dirichlet]=np.zeros(Dirichlet.shape) # unnecessary in the case of hom Dirichlet
-
     # enforcing periodicity
     for k in range(periodicPairs.shape[0]):  
         x[periodicPairs[k,1]]=x[periodicPairs[k,0]]
@@ -375,61 +399,40 @@ def solveLaplace_periodicPipe_slow(coordinates,elements,Dirichlet,periodicPairs,
                             i.e. the i-th component is the value of the finite element approximation Uh at coordinates[i,:]:
                             --> x[i]=Uh(coordinates[i,:])
     """
-    
     nC = np.shape(coordinates) [0] # Number of coordinates
     nE = np.shape(elements) [0]    # Number of elements
     x = np.zeros(nC)               # initialization of solution vector
-    #periodizationTuple=[]          # list storing the tuples for periodization
-
     # Assembly of stiffness matrix
     A = sparse.lil_matrix((nC,nC))  # Sparse matrix format
-
     for i in range(nE):
         # retrieve the coordinates of the nodes of the i-th element
         # Nodes must be ordered counter clockwise!
         nodesidx = elements[i,0:3]
         nodes=coordinates[nodesidx,:]
-
-        #for j in range(3):              # inefficent/wastefull!!! But doesn't increase order
-        #    if elements[i,j]!=elements[i,j+3]:
-        #        periodizationTuple.append([elements[i,j],elements[i,j+3]])
-
-
         P = np.vstack(([1,1,1],np.transpose(nodes)))
         areaT = np.linalg.det(P)/2
         grad = np.linalg.solve(P,np.array([[0,0],[1,0],[0,1]]))
-
         A[np.ix_(elements[i,3:6], elements[i,3:6])] += areaT * grad @ np.transpose(grad)
-
     A = A.tocsr()
-
     # incorporating Dirichlet conditions
     if uD != None:
         for k in np.unique(Dirichlet):
             x[k-1] = uD(coordinates[k-1,0],coordinates[k-1,1])
-    
     # Assembly of right hand side
     b = np.zeros(nC)
     b =-A @ x
-
     for i in range(nE):
         nodesidx = elements[i,0:3]
         nodes=coordinates[nodesidx,:]
-
-
         # quadrature of f on the i-th element
         P = np.vstack(([1,1,1],np.transpose(nodes)))
         areaT = np.linalg.det(P)/2
         sT = np.array(nodes).sum(axis=0)/3
-
         b[elements[i,3:6]] += areaT * f(sT[0],sT[1])/3
-
-
     # Computation of P1−FEM approximation
     freenodes=np.setdiff1d(elements[:,3:6] , Dirichlet)
     x[freenodes]=sparse.linalg.spsolve(A[np.ix_(freenodes, freenodes)],b[freenodes])
     #x[Dirichlet]=np.zeros(Dirichlet.shape) # unnecessary in the case of hom Dirichlet
-
     # enforcing periodicity
     for k in range(periodicPairs.shape[0]):  
         x[periodicPairs[k,1]]=x[periodicPairs[k,0]]
@@ -442,7 +445,7 @@ def solveLaplace_periodicPipe_slow(coordinates,elements,Dirichlet,periodicPairs,
 
 # evaluate solution on uniform grids
 #
-def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination',uD=None,boxcutout=np.array([])):
+def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination',uD=None,boxcutout=np.array([]),gridTrans=np.array([])):
     """
         Evaluates a function U(z) at an arbitrary point z=(x,y) given by the the finite element discretization (u,coordinates,elements) over a uniform grid
             of the periodic pipe, where u are the coordinates of U in the finite element basis.
@@ -462,25 +465,31 @@ def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexC
     J=np.mod(np.floor((Nx*z[:,0])/Lx),Nx)
     # Compute y index of the quadrant in which z lies
     I=np.floor(Ny*z[:,1]/Ly)
-    
-    # Compute an indicator function and a value vector to later enforce the Dirichlet conditions beyond the top and the bottom
+    # Compute an indicator function to later enforce the Dirichlet conditions beyond the top and the bottom
     DirIndicator=np.ones(np.shape(z)[0])
     DirIndicator[I<0]=0
     DirIndicator[I>Ny-1]=0
+    # Compute an indicator function for the complement of the box and update the Dirichlet indicator
+    BoxIndicator=np.ones(np.shape(z)[0])
+    if np.shape(boxcutout)==(2,2):
+        inXbounds=np.logical_and(J>=boxcutout[0,0],J<boxcutout[0,1])
+        inYbounds=np.logical_and(I>=boxcutout[1,0],I<boxcutout[1,1])
+        BoxIndicator[np.logical_and(inXbounds,inYbounds)]=0
+    DirIndicator=BoxIndicator*DirIndicator
+    # compute a value vector for the nodes beyond the boundary
     DirVals=np.zeros(np.shape(z)[0])
     if uD != None:
         DirVals=uD(z[:,0],z[:,1])
-
     # Fix associated grid points for those inputs (by setting them to zero) which lie beyond the Dirichlet boundary for later computations
     I=I*DirIndicator
     # Change datatype of index to int
     Iint=I.astype(int)
     Jint=J.astype(int)
-    # Node indices for the quadrant of the mesh in which x lies
-    n0 = Iint * (Nx + 1) + Jint
-    n1 = n0 + 1
-    n2 = n0 + (Nx + 1)
-    n3 = n2 + 1
+    # Node indices (for full mesh) for the quadrant of the mesh in which x lies
+    n0 = gridTrans[Iint * (Nx + 1) + Jint,1]
+    n1 = gridTrans[Iint * (Nx + 1) + Jint + 1,1]
+    n2 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1),1]
+    n3 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1) + 1,1]
     #compute interpolation
     if interpolation=='convexCombination':      # Compute the bilinear interpolation
         lambdaX=np.remainder((Nx*z[:,0]),Lx)
@@ -495,9 +504,6 @@ def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexC
         lambdaY=np.round(np.remainder((Ny*z[:,1]),Ly))
         U=DirIndicator*(u[n0]*(1-lambdaX)*(1-lambdaY)+u[n1]*lambdaX*(1-lambdaY)+u[n2]*(1-lambdaX)*lambdaY+u[n3]*lambdaX*lambdaY) + (1-DirIndicator)*DirVals
     
-    
-
-
     return U
     
 
@@ -712,9 +718,6 @@ def solveLaplace_Torus(coordinates,elements,periodicPairs,f,umean=0,gridType='un
 
         meanDiscrepancy=umean-xMean
         x+=meanDiscrepancy
-
-
-    
 
     return x
 
