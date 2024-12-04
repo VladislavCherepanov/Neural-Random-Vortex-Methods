@@ -486,10 +486,15 @@ def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexC
     Iint=I.astype(int)
     Jint=J.astype(int)
     # Node indices (for full mesh) for the quadrant of the mesh in which x lies
-    n0 = gridTrans[Iint * (Nx + 1) + Jint,1]
-    n1 = gridTrans[Iint * (Nx + 1) + Jint + 1,1]
-    n2 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1),1]
-    n3 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1) + 1,1]
+    n0 = Iint * (Nx + 1) + Jint
+    n1 = Iint * (Nx + 1) + Jint + 1
+    n2 = Iint * (Nx + 1) + Jint + (Nx + 1)
+    n3 = Iint * (Nx + 1) + Jint + (Nx + 1) + 1
+    if np.shape(boxcutout)==(2,2): # gridtranslation in case of boxcutout
+        n0 = gridTrans[Iint * (Nx + 1) + Jint,1]
+        n1 = gridTrans[Iint * (Nx + 1) + Jint + 1,1]
+        n2 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1),1]
+        n3 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1) + 1,1]
     #compute interpolation
     if interpolation=='convexCombination':      # Compute the bilinear interpolation
         lambdaX=np.remainder((Nx*z[:,0]),Lx)
@@ -507,6 +512,84 @@ def evalFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexC
     return U
     
 
+# evaluate the orthogonal gradient/curl on uniform grids
+#
+def orthogradFEM_periodicPipe_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombination',uD=None,boxcutout=np.array([]),gridTrans=np.array([])):
+    """
+        Evaluates a function U(z) at an arbitrary point z=(x,y) given by the the finite element discretization (u,coordinates,elements) over a uniform grid
+            of the periodic pipe, where u are the coordinates of U in the finite element basis.
+
+        params:
+            z               float type array, storing the coordinate of the evaluation points
+            u               float type array, storing the coordinates of the function to be evaluated
+
+        
+        Returns:
+            curlU               float type array, storing the evluations
+    """
+    # initiazlize ouput vector
+    curlU=np.zeros(np.shape(z))
+    # Compute x index of the quadrant in which z lies (mod is used to enforce periodicity)
+    J=np.mod(np.floor((Nx*z[:,0])/Lx),Nx)
+    # Compute y index of the quadrant in which z lies
+    I=np.floor(Ny*z[:,1]/Ly)
+    # Construct two (nZ,4)-matrix, where nZ is the number of evaluation points,
+    # such that the i-th row stores the values of the x/y coordinates of the 4 quadrant nodes
+    Zx=np.column_stack((J*Lx/Nx,(J+1)*Lx/Nx,J*Lx/Nx,(J+1)*Lx/Nx))
+    Zy=np.column_stack((I*Ly/Ny,I*Ly/Ny,(I+1)*Ly/Ny,(I+1)*Ly/Ny))
+    # Compute an indicator function to later enforce the Dirichlet conditions beyond the top and the bottom
+    DirIndicator=np.ones(np.shape(z)[0])
+    DirIndicator[I<0]=0
+    DirIndicator[I>Ny-1]=0
+    # Compute an indicator function for the complement of the box and update the Dirichlet indicator
+    BoxIndicator=np.ones(np.shape(z)[0])
+    if np.shape(boxcutout)==(2,2):
+        inXbounds=np.logical_and(J>=boxcutout[0,0],J<boxcutout[0,1])
+        inYbounds=np.logical_and(I>=boxcutout[1,0],I<boxcutout[1,1])
+        BoxIndicator[np.logical_and(inXbounds,inYbounds)]=0
+    DirIndicator=BoxIndicator*DirIndicator
+    # Fix associated grid indices for those inputs (by setting them to zero) which lie beyond the Dirichlet boundary for later computations
+    I=I*DirIndicator
+    # Change datatype of index to int
+    Iint=I.astype(int)
+    Jint=J.astype(int)
+    # Node indices (for full mesh) for the quadrant of the mesh in which x lies
+    n0 = Iint * (Nx + 1) + Jint
+    n1 = Iint * (Nx + 1) + Jint + 1
+    n2 = Iint * (Nx + 1) + Jint + (Nx + 1)
+    n3 = Iint * (Nx + 1) + Jint + (Nx + 1) + 1 
+    if np.shape(boxcutout)==(2,2): # gridtranslation in case of boxcutout
+        n0 = gridTrans[Iint * (Nx + 1) + Jint,1]
+        n1 = gridTrans[Iint * (Nx + 1) + Jint + 1,1]
+        n2 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1),1]
+        n3 = gridTrans[Iint * (Nx + 1) + Jint + (Nx + 1) + 1,1]
+    # construct a (nZ,4)-matrix, where nZ is the number of evaluation points,
+    # such that the i-th row stores the values of u on the points of the surrounding quadrant
+    Uvals=np.column_stack((DirIndicator*u[n0],DirIndicator*u[n1],DirIndicator*u[n2],DirIndicator*u[n3]))
+    if uD != None:
+        DirVals=np.column_stack(( uD(Zx[:,0],Zy[:,0]),uD(Zx[:,1],Zy[:,1]),uD(Zx[:,2],Zy[:,2]),uD(Zx[:,3],Zy[:,3]) ))
+        Uvals[DirIndicator<1/2,:]=DirVals[DirIndicator<1/2,:]
+    # lower triangle [n0,n1,n3], uper triangle [n0,n3,n2]
+    # --> on the triangle T=[z_0,z_2,z_3], one has the identity
+    #     2|T| curl U = (z_2-z_0)*(u_1-u_0) - (z_1-z_0)*(u_2-u_0)
+    # compute area of quadrant (=2|T|)
+    #area = (np.linalg.norm(z1-z0,axis=1) * np.linalg.norm(z2-z0,axis=1))
+    #area = (z1[:,0]-z0[:,0])*(z3[:,1]-z0[:,1]) - (z1[:,1]-z0[:,1])*(z3[:,0]-z0[:,0])
+    area = Lx/(Nx+1) * Ly/(Ny+1)
+    # curl of lower triangle
+    curl1 = np.column_stack(( (Zx[:,3]-Zx[:,0])*(Uvals[:,1]-Uvals[:,0])-(Zx[:,1]-Zx[:,0])*(Uvals[:,3]-Uvals[:,0]) , (Zy[:,3]-Zy[:,0])*(Uvals[:,1]-Uvals[:,0])-(Zy[:,1]-Zy[:,0])*(Uvals[:,3]-Uvals[:,0]) ))/area
+    curl2 = np.column_stack(( (Zx[:,2]-Zx[:,0])*(Uvals[:,3]-Uvals[:,0])-(Zx[:,3]-Zx[:,0])*(Uvals[:,2]-Uvals[:,0]) , (Zy[:,2]-Zy[:,0])*(Uvals[:,3]-Uvals[:,0])-(Zy[:,3]-Zy[:,0])*(Uvals[:,2]-Uvals[:,0]) ))/area
+    #compute interpolation
+    if interpolation=='AverageOfBothDiffsInQuadrant':      # Compute the average of both differentialsin quadrant
+        curlU=(curl1+curl2)/2
+    else:      # Compute the bilinear interpolation, the standard input
+        lambdaX=np.remainder((Nx*z[:,0]),Lx)
+        lambdaY=np.remainder((Ny*z[:,1]),Ly)
+        # Define indicator to indicate the triangle in which z lies, 1 when in lower triangle, 0 when in upper
+        upperOrLowerTriangle = np.column_stack(( np.heaviside(lambdaX-lambdaY,0),np.heaviside(lambdaX-lambdaY,0) )) 
+        curlU=upperOrLowerTriangle*curl1 + (1-upperOrLowerTriangle)*curl2   
+    
+    return curlU
 
 
 
@@ -815,9 +898,7 @@ def solveLaplace_Torus_alternateMeanComp(coordinates,elements,periodicPairs,f,um
     return x
 
 
-
-
-
+    
 
 # evaluate solution
 #
@@ -863,16 +944,73 @@ def evalFEM_Torus_unifGrid(z,u,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='convexCombinat
         lambdaY=np.round(np.remainder((Ny*z[:,1]),Ly))
         U=(u[n0]*(1-lambdaX)*(1-lambdaY)+u[n1]*lambdaX*(1-lambdaY)+u[n2]*(1-lambdaX)*lambdaY+u[n3]*lambdaX*lambdaY)
     
+    return U
+
+
+
+
+
+
+
+
+# 'evaluate' the curl/orthodifferential (−du/dy, du/dx) of the solution at points z
+#   --> note that the solution is not globally in C^{1}, thus evaluations only make sense inside of the elements
+#
+def orthogradFEM_Torus_unifGrid(z,u,coordinates,Nx,Ny,Lx=1.0,Ly=1.0,interpolation='AverageOfBothDiffsInQuadrant'):
+    """
+        Compute nabla^{ortho}U(z)=(-d_{x_2}U(z),d_{x_1}U(z)) for a function U, given through its coordinates u in the finite element basis
+
+        params:
+            z               float type array, storing the coordinate of the evaluation points
+            u               float type array, storing the coordinates of the function to be evaluated
+
+        
+        Returns:
+            U               float type array, storing the evluations of the orthograd
+
+    """
+    # initiazlize ouput vector
+    U=np.zeros(np.shape(z))
+    # Compute x index of the quadrant in which z lies (mod is used to enforce periodicity)
+    J=np.mod(np.floor((Nx*z[:,0])/Lx),Nx)
+    # Compute y index of the quadrant in which z lies
+    I=np.mod(np.floor(Ny*z[:,1]/Ly),Ny) 
+    # Change datatype of index to int
+    Iint=I.astype(int)
+    Jint=J.astype(int)
+    # Node indices for the quadrant of the mesh in which z lies
+    n0 = Iint * (Nx + 1) + Jint
+    n1 = n0 + 1
+    n2 = n0 + (Nx + 1)
+    n3 = n2 + 1
+    # corresponding coordinate vectors
+    z0 = coordinates[n0,:]
+    z1 = coordinates[n1,:]
+    z2 = coordinates[n2,:]
+    z3 = coordinates[n3,:]
+    # lower triangle [n0,n1,n3], uper triangle [n0,n3,n2]
+    # --> on the triangle T=[z_0,z_2,z_3], one has the identity
+    #     2|T| curl U = (z_2-z_0)*(u_1-u_0) - (z_1-z_0)*(u_2-u_0)
+    # compute area of quadrant (=2|T|)
+    #area = (np.linalg.norm(z1-z0,axis=1) * np.linalg.norm(z2-z0,axis=1))
+    #area = (z1[:,0]-z0[:,0])*(z3[:,1]-z0[:,1]) - (z1[:,1]-z0[:,1])*(z3[:,0]-z0[:,0])
+    area = Lx/(Nx+1) * Ly/(Ny+1)
+    # curl of lower triangle
+    curl1 = ((z3-z0)*np.transpose(np.array([(u[n1]-u[n0]),(u[n1]-u[n0])])) - (z1-z0)*np.transpose(np.array([(u[n3]-u[n0]),(u[n3]-u[n0])])))/area
+    # curl of upper triangle
+    curl2 = ((z2-z0)*np.transpose(np.array([(u[n3]-u[n0]),(u[n3]-u[n0])])) - (z3-z0)*np.transpose(np.array([(u[n2]-u[n0]),(u[n2]-u[n0])])))/area
+    #compute interpolation
+    if interpolation=='DiffInTriangle':      # Compute the bilinear interpolation, the standard input
+        lambdaX=np.remainder((Nx*z[:,0]),Lx)
+        lambdaY=np.remainder((Ny*z[:,1]),Ly)
+        upperOrLowerTriangle = np.transpose(np.array([np.heaviside(lambdaX-lambdaY,0),np.heaviside(lambdaX-lambdaY,0)])) # 1 when in lower, 0 when in upper
+        U=upperOrLowerTriangle*curl1 + (1-upperOrLowerTriangle)*curl2   
+    elif interpolation=='AverageOfBothDiffsInQuadrant':      # Compute the average of both differentialsin quadrant
+        U=(curl1+curl2)/2
     
-
-
     return U
     
    
-    
-
-
-
 
 
 
